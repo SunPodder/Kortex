@@ -17,3 +17,9 @@ kortex = "kortex.main:main"
 [build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"kortex" = ["ui/qml/**/*.qml"]
