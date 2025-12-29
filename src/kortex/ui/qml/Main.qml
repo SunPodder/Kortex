@@ -75,19 +75,16 @@ ApplicationWindow {
                     anchors.margins: 8
                     spacing: 4
 
-                    // Collapse toggle button
-                    Button {
+                    // App Title
+                    Label {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 40
-                        flat: true
-                        text: window.sidebarCollapsed ? "☰" : "☰"
-                        font.pixelSize: 18
-                        onClicked: window.sidebarCollapsed = !window.sidebarCollapsed
-
-                        CustomToolTip {
-                            text: window.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"
-                            visible: parent.hovered
-                        }
+                        text: "Kortex"
+                        font.pixelSize: 20
+                        font.bold: true
+                        color: theme.text
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
                     }
 
                     Rectangle {
@@ -117,28 +114,6 @@ ApplicationWindow {
                         visible: !window.sidebarCollapsed
                         icon: "🔍"
                         text: "Search chats"
-                    }
-
-                    SidebarItem {
-                        Layout.fillWidth: true
-                        visible: !window.sidebarCollapsed
-                        icon: "🖼️"
-                        text: "Images"
-                        badge: "NEW"
-                    }
-
-                    SidebarItem {
-                        Layout.fillWidth: true
-                        visible: !window.sidebarCollapsed
-                        icon: "🧩"
-                        text: "Apps"
-                    }
-
-                    SidebarItem {
-                        Layout.fillWidth: true
-                        visible: !window.sidebarCollapsed
-                        icon: "📁"
-                        text: "Projects"
                     }
 
                     Rectangle {
@@ -232,6 +207,7 @@ ApplicationWindow {
                             CustomComboBox {
                                 id: modelSelector
                                 Layout.preferredWidth: 200
+                                Layout.leftMargin: 8
                                 model: ["GPT-4 Turbo", "Claude 3.5 Sonnet", "Llama 3", "Local Model"]
                                 currentIndex: 0
                             }
@@ -241,7 +217,21 @@ ApplicationWindow {
                             // New Chat button
                             Button {
                                 text: "+ New Chat"
-                                highlighted: true
+                                font.bold: true
+                                
+                                contentItem: Label {
+                                    text: parent.text
+                                    font: parent.font
+                                    color: "#ffffff"
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+
+                                background: Rectangle {
+                                    color: parent.down ? "#2a4c8a" : (parent.hovered ? "#3a68b8" : "#325ab0")
+                                    radius: 8
+                                }
+
                                 onClicked: {
                                     chatsModel.insert(0, {
                                         title: "New conversation",

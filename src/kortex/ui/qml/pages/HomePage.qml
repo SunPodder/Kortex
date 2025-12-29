@@ -301,7 +301,23 @@ Item {
                     Button {
                         text: "Send"
                         enabled: conversationInputField.text.trim().length > 0
-                        highlighted: true
+                        font.bold: true
+                        
+                        contentItem: Label {
+                            text: parent.text
+                            font: parent.font
+                            color: parent.enabled ? "#ffffff" : "#707a8a"
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+
+                        background: Rectangle {
+                            color: parent.enabled ? (parent.down ? "#2a4c8a" : (parent.hovered ? "#3a68b8" : "#325ab0")) : "#1b2230"
+                            border.color: parent.enabled ? "transparent" : "#2a3446"
+                            border.width: 1
+                            radius: 8
+                        }
+                        
                         onClicked: sendConversationMessage()
                     }
                 }
