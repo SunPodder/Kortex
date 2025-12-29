@@ -103,6 +103,40 @@ Item {
                         anchors.margins: 8
                         spacing: 8
 
+                        // Agent mode toggle button
+                        Button {
+                            Layout.preferredWidth: 40
+                            Layout.preferredHeight: 40
+                            flat: true
+                            enabled: ChatController.agentModelsAvailable
+
+                            contentItem: Label {
+                                text: "🤖"
+                                font.pixelSize: 16
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                opacity: ChatController.agentModelsAvailable ? 1.0 : 0.5
+                            }
+
+                            background: Rectangle {
+                                color: ChatController.agentMode ? "#3b82f6" : (parent.hovered && ChatController.agentModelsAvailable ? "#243149" : "transparent")
+                                radius: 20
+                            }
+
+                            onClicked: ChatController.setAgentMode(!ChatController.agentMode)
+
+                            Components.CustomToolTip {
+                                text: {
+                                    if (!ChatController.agentModelsAvailable) {
+                                        var missing = ChatController.missingAgentModels
+                                        return "Agent mode requires: " + missing.join(", ")
+                                    }
+                                    return ChatController.agentMode ? "Agent mode (click to disable)" : "Enable agent mode"
+                                }
+                                visible: parent.hovered
+                            }
+                        }
+
                         Button {
                             Layout.preferredWidth: 40
                             Layout.preferredHeight: 40

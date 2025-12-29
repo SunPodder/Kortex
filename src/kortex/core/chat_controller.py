@@ -8,9 +8,17 @@ from typing import Optional
 
 from PySide6.QtCore import QObject, Property, Signal, Slot, QThread
 
-from kortex.core.database import ChatDatabase
+from kortex.core.database import KortexDatabase
 from kortex.core.ollama_service import OllamaService, ChatMessage
-from kortex.core.agent import AgentService, AgentState, get_agent_service
+from kortex.core.agent import (
+    AgentService,
+    AgentState,
+    get_agent_service,
+    check_required_models,
+    REQUIRED_AGENT_MODELS,
+    ROUTER_MODEL,
+    TOOL_MODEL,
+)
 from kortex.core.tools import ToolCall, ToolResult, tool_registry, Permission
 
 logger = logging.getLogger(__name__)
@@ -71,6 +79,8 @@ class ToolExecutionWorker(QThread):
         state: AgentState,
         approved_ids: set[str],
         denied_ids: set[str],
+        user_message: str = "",
+        history: list[dict] = None,
     ) -> None:
         super().__init__()
         self._agent_service = agent_service
@@ -78,6 +88,8 @@ class ToolExecutionWorker(QThread):
         self._state = state
         self._approved_ids = approved_ids
         self._denied_ids = denied_ids
+        self._user_message = user_message
+        self._history = history or []
     
     def run(self) -> None:
         """Execute the tool calls."""
@@ -86,6 +98,8 @@ class ToolExecutionWorker(QThread):
                 self._state,
                 approved_call_ids=self._approved_ids,
                 denied_call_ids=self._denied_ids,
+                user_message=self._user_message,
+                history=self._history,
             )
             
             tool_call_dicts = [tc.to_dict() for tc in new_pending]
@@ -206,15 +220,18 @@ class ChatController(QObject):
     # Agent-related signals
     toolCallsPending = Signal(str, list)  # chat_id, list of tool call dicts
     agentModeChanged = Signal()
+    agentModelsAvailableChanged = Signal()
     
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         
-        self._db = ChatDatabase()
+        self._db = KortexDatabase()
         self._ollama = OllamaService()
         self._current_chat_id: Optional[str] = None
         self._is_loading = False
-        self._agent_mode = True  # Enable agent mode by default
+        self._agent_mode = False  # Start disabled until models are verified
+        self._agent_models_available = False
+        self._missing_agent_models: list[str] = []
         self._worker: Optional[ChatWorker] = None
         self._agent_worker: Optional[AgentWorker] = None
         self._tool_worker: Optional[ToolExecutionWorker] = None
@@ -225,6 +242,8 @@ class ChatController(QObject):
         # Agent state per chat
         self._agent_states: dict[str, AgentState] = {}
         self._pending_tool_calls: dict[str, list[dict]] = {}
+        # Store user messages for context during tool execution
+        self._user_messages: dict[str, str] = {}
         
         # Load available models
         self._refresh_models()
@@ -259,6 +278,14 @@ class ChatController(QObject):
         if self._agent_mode != value:
             self._agent_mode = value
             self.agentModeChanged.emit()
+    
+    @Property(bool, notify=agentModelsAvailableChanged)
+    def agentModelsAvailable(self) -> bool:
+        return self._agent_models_available
+    
+    @Property(list, notify=agentModelsAvailableChanged)
+    def missingAgentModels(self) -> list:
+        return self._missing_agent_models
     
     @Property(str, notify=currentChatChanged)
     def currentChatId(self) -> str:
@@ -324,8 +351,24 @@ class ChatController(QObject):
             self._models = self._ollama.get_model_names()
             if self._models and not self._current_model:
                 self._current_model = self._models[0]
+            
+            # Check if required agent models are available
+            available, missing = check_required_models(self._models)
+            self._agent_models_available = available
+            self._missing_agent_models = missing
+            
+            if not available:
+                logger.warning(f"Agent mode requires models: {missing}")
+                # Disable agent mode if models are missing
+                if self._agent_mode:
+                    self._agent_mode = False
+                    self.agentModeChanged.emit()
+            
+            self.agentModelsAvailableChanged.emit()
         else:
             self._models = []
+            self._agent_models_available = False
+            self._missing_agent_models = list(REQUIRED_AGENT_MODELS)
             logger.warning("Ollama is not available")
         
         self.modelsChanged.emit()
@@ -402,6 +445,10 @@ class ChatController(QObject):
     @Slot(bool)
     def setAgentMode(self, enabled: bool) -> None:
         """Enable or disable agent mode."""
+        if enabled and not self._agent_models_available:
+            # Cannot enable agent mode without required models
+            logger.warning(f"Cannot enable agent mode. Missing models: {self._missing_agent_models}")
+            return
         self.agentMode = enabled
     
     @Slot(str, str)
@@ -467,6 +514,9 @@ class ChatController(QObject):
     
     def _send_agent_message(self, chat_id: str, content: str, messages: list) -> None:
         """Send a message using the agent with tool calling."""
+        # Store user message for later context during tool execution
+        self._user_messages[chat_id] = content
+        
         # Get agent state
         state = self._get_or_create_agent_state(chat_id)
         
@@ -544,6 +594,10 @@ class ChatController(QObject):
             self.chatsChanged.emit()
             self.responseReceived.emit(chat_id, response)
         
+        # Clean up stored user message
+        if chat_id in self._user_messages:
+            del self._user_messages[chat_id]
+        
         # Generate title for first message
         messages = self._db.get_messages(chat_id)
         if len(messages) == 2:
@@ -584,6 +638,14 @@ class ChatController(QObject):
         # Clear stored pending calls
         self._pending_tool_calls[chat_id] = []
         
+        # Get stored user message and history for context
+        user_message = self._user_messages.get(chat_id, "")
+        messages = self._db.get_messages(chat_id)
+        history = [
+            {"role": msg.role, "content": msg.content}
+            for msg in messages
+        ]
+        
         # Create and start tool execution worker
         self._tool_worker = ToolExecutionWorker(
             agent_service=self._get_agent_service(),
@@ -591,6 +653,8 @@ class ChatController(QObject):
             state=state,
             approved_ids=approved_ids,
             denied_ids=denied_ids,
+            user_message=user_message,
+            history=history,
         )
         self._tool_worker.execution_complete.connect(self._on_tool_execution_complete)
         self._tool_worker.execution_error.connect(self._on_response_error)

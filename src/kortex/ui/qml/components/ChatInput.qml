@@ -48,6 +48,42 @@ Rectangle {
                 anchors.bottomMargin: root.currentLineCount === 1 ? 0 : 8
                 spacing: 4
 
+                // Agent mode toggle button
+                Button {
+                    id: agentButton
+                    Layout.preferredWidth: 36
+                    Layout.preferredHeight: 36
+                    Layout.alignment: root.currentLineCount === 1 ? Qt.AlignVCenter : Qt.AlignBottom
+                    flat: true
+                    enabled: ChatController.agentModelsAvailable
+
+                    contentItem: Label {
+                        text: "🤖"
+                        font.pixelSize: 16
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        opacity: ChatController.agentModelsAvailable ? 1.0 : 0.5
+                    }
+
+                    background: Rectangle {
+                        color: ChatController.agentMode ? "#3b82f6" : (parent.hovered && ChatController.agentModelsAvailable ? "#243149" : "transparent")
+                        radius: 18
+                    }
+
+                    onClicked: ChatController.setAgentMode(!ChatController.agentMode)
+
+                    CustomToolTip {
+                        text: {
+                            if (!ChatController.agentModelsAvailable) {
+                                var missing = ChatController.missingAgentModels
+                                return "Agent mode requires: " + missing.join(", ")
+                            }
+                            return ChatController.agentMode ? "Agent mode (click to disable)" : "Enable agent mode"
+                        }
+                        visible: parent.hovered
+                    }
+                }
+
                 // Plus button for tools
                 Button {
                     id: plusButton

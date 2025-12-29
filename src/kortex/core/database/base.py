@@ -1,61 +1,30 @@
-"""SQLite database module for chat persistence."""
+"""Base Kortex database module for data persistence."""
 from __future__ import annotations
 
 import sqlite3
 import uuid
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-
-@dataclass
-class Chat:
-    """Represents a chat conversation."""
-    id: str
-    title: str
-    created_at: str
-    updated_at: str
-    model: str = ""
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "title": self.title,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "model": self.model,
-        }
+from kortex.core.database.models.chat import Chat
+from kortex.core.database.models.message import Message
 
 
-@dataclass
-class Message:
-    """Represents a chat message."""
-    id: str
-    chat_id: str
-    role: str  # 'user' or 'assistant'
-    content: str
-    created_at: str
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "chat_id": self.chat_id,
-            "role": self.role,
-            "content": self.content,
-            "created_at": self.created_at,
-        }
-
-
-class ChatDatabase:
-    """SQLite database for storing chats and messages."""
+class KortexDatabase:
+    """SQLite database for storing all Kortex data.
+    
+    This is the main database class that manages the kortex.db file.
+    It contains tables for chats, messages, and can be extended for
+    additional data types in the future.
+    """
 
     def __init__(self, db_path: Optional[Path] = None) -> None:
         if db_path is None:
             # Default to user's data directory
             data_dir = Path.home() / ".local" / "share" / "kortex"
             data_dir.mkdir(parents=True, exist_ok=True)
-            db_path = data_dir / "chats.db"
+            db_path = data_dir / "kortex.db"
         
         self.db_path = db_path
         self._init_db()
@@ -104,6 +73,8 @@ class ChatDatabase:
             conn.commit()
         finally:
             conn.close()
+
+    # ==================== Chat Operations ====================
 
     def create_chat(self, title: str = "New conversation", model: str = "") -> Chat:
         """Create a new chat."""
@@ -228,6 +199,8 @@ class ChatDatabase:
         finally:
             conn.close()
 
+    # ==================== Message Operations ====================
+
     def add_message(self, chat_id: str, role: str, content: str) -> Message:
         """Add a message to a chat."""
         conn = self._get_connection()
@@ -323,3 +296,7 @@ class ChatDatabase:
                 return title
         
         return "New conversation"
+
+
+# Backwards compatibility alias
+ChatDatabase = KortexDatabase

@@ -363,65 +363,6 @@ ApplicationWindow {
                                     hoverEnabled: true
                                 }
                             }
-                            
-                            // Agent mode toggle
-                            Rectangle {
-                                Layout.preferredWidth: agentRow.width + 16
-                                Layout.preferredHeight: 32
-                                radius: 16
-                                color: ChatController.agentMode ? "#1e3a5f" : "#1b2230"
-                                border.color: ChatController.agentMode ? "#3b82f6" : "#3a4556"
-                                border.width: 1
-                                
-                                RowLayout {
-                                    id: agentRow
-                                    anchors.centerIn: parent
-                                    spacing: 6
-                                    
-                                    Label {
-                                        text: "🤖"
-                                        font.pixelSize: 14
-                                    }
-                                    
-                                    Label {
-                                        text: "Agent"
-                                        color: ChatController.agentMode ? "#60a5fa" : "#9aa5b8"
-                                        font.pixelSize: 12
-                                        font.bold: ChatController.agentMode
-                                    }
-                                    
-                                    Rectangle {
-                                        width: 36
-                                        height: 20
-                                        radius: 10
-                                        color: ChatController.agentMode ? "#3b82f6" : "#374151"
-                                        
-                                        Rectangle {
-                                            width: 16
-                                            height: 16
-                                            radius: 8
-                                            color: "#ffffff"
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            x: ChatController.agentMode ? parent.width - width - 2 : 2
-                                            
-                                            Behavior on x {
-                                                NumberAnimation { duration: 150 }
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: ChatController.setAgentMode(!ChatController.agentMode)
-                                }
-                                
-                                CustomToolTip {
-                                    text: ChatController.agentMode ? "Agent mode enabled (tools available)" : "Agent mode disabled (regular chat)"
-                                    visible: parent.children[1].containsMouse
-                                }
-                            }
 
                             Item { Layout.fillWidth: true }
 
