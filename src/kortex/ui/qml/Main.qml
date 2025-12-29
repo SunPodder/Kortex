@@ -23,23 +23,112 @@ ApplicationWindow {
         category: "app"
     }
 
-    property int currentChatIndex: 0
-    property bool sidebarCollapsed: false
+    property string currentChatId: ""
+    property var availableModels: []
+    property int selectedModelIndex: 0
 
-    // Mock chat list
+    // Chat list model
     ListModel {
         id: chatsModel
-        ListElement {
-            title: "New conversation"
-            preview: "Hello! I'm Kortex..."
+    }
+
+    // Load chats from backend
+    function loadChats() {
+        chatsModel.clear()
+        var chats = ChatController.getChats()
+        if (chats && chats.length > 0) {
+            for (var i = 0; i < chats.length; i++) {
+                var chat = chats[i]
+                if (chat) {
+                    chatsModel.append({
+                        "id": chat.id || "",
+                        "title": chat.title || "New Chat",
+                        "preview": chat.preview || "",
+                        "model": chat.model || ""
+                    })
+                }
+            }
         }
-        ListElement {
-            title: "Python debugging help"
-            preview: "Can you help me fix..."
+        
+        // Select first chat if available and none selected
+        if (chatsModel.count > 0 && !window.currentChatId) {
+            var firstChat = chatsModel.get(0)
+            if (firstChat && firstChat.id) {
+                window.currentChatId = firstChat.id
+                ChatController.selectChat(window.currentChatId)
+            }
         }
-        ListElement {
-            title: "Project ideas"
-            preview: "I need some ideas for..."
+    }
+
+    // Load models from backend
+    function loadModels() {
+        window.availableModels = ChatController.getModels()
+        if (window.availableModels.length > 0) {
+            // Find current model index
+            var currentModel = ChatController.currentModel
+            for (var i = 0; i < window.availableModels.length; i++) {
+                if (window.availableModels[i] === currentModel) {
+                    window.selectedModelIndex = i
+                    break
+                }
+            }
+        }
+    }
+
+    // Create new chat
+    function createNewChat() {
+        var chatId = ChatController.createChat()
+        window.currentChatId = chatId
+        loadChats()
+    }
+
+    // Delete a chat
+    function deleteChat(chatId) {
+        if (!chatId) return
+        
+        ChatController.deleteChat(chatId)
+        loadChats()
+        
+        // Update current chat ID
+        if (chatsModel.count > 0) {
+            var firstChat = chatsModel.get(0)
+            if (firstChat && firstChat.id) {
+                window.currentChatId = firstChat.id
+                ChatController.selectChat(window.currentChatId)
+            } else {
+                window.currentChatId = ""
+            }
+        } else {
+            window.currentChatId = ""
+        }
+    }
+
+    // Select a chat
+    function selectChat(chatId) {
+        window.currentChatId = chatId || ""
+        ChatController.selectChat(chatId || "")
+    }
+
+    // Initialize on component completion
+    Component.onCompleted: {
+        loadModels()
+        loadChats()
+    }
+
+    // Connect to backend signals
+    Connections {
+        target: ChatController
+        
+        function onChatsChanged() {
+            loadChats()
+        }
+        
+        function onModelsChanged() {
+            loadModels()
+        }
+        
+        function onCurrentChatChanged() {
+            window.currentChatId = ChatController.currentChatId || ""
         }
     }
 
@@ -57,10 +146,9 @@ ApplicationWindow {
             anchors.fill: parent
             spacing: 0
 
-            // Collapsible Sidebar
             Rectangle {
                 id: sidebar
-                Layout.preferredWidth: window.sidebarCollapsed ? 60 : 260
+                Layout.preferredWidth: 260
                 Layout.fillHeight: true
                 color: theme.surface
                 border.color: theme.border
@@ -99,13 +187,7 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         icon: "+"
                         text: window.sidebarCollapsed ? "" : "New chat"
-                        onClicked: {
-                            chatsModel.insert(0, {
-                                title: "New conversation",
-                                preview: "Start chatting..."
-                            })
-                            window.currentChatIndex = 0
-                        }
+                        onClicked: createNewChat()
                     }
 
                     // Section items
@@ -148,11 +230,22 @@ ApplicationWindow {
                             spacing: 2
 
                             delegate: ChatItem {
+                                required property int index
+                                required property string id
+                                required property string title
+                                required property string preview
+                                
                                 width: chatListView.width
-                                title: model.title
-                                preview: model.preview
-                                selected: index === window.currentChatIndex
-                                onClicked: window.currentChatIndex = index
+                                chatId: id
+                                chatTitle: title
+                                chatPreview: preview
+                                selected: id === window.currentChatId
+                                onClicked: {
+                                    selectChat(id)
+                                }
+                                onDeleteClicked: {
+                                    deleteChat(id)
+                                }
                             }
                         }
                     }
@@ -208,8 +301,66 @@ ApplicationWindow {
                                 id: modelSelector
                                 Layout.preferredWidth: 200
                                 Layout.leftMargin: 8
-                                model: ["GPT-4 Turbo", "Claude 3.5 Sonnet", "Llama 3", "Local Model"]
-                                currentIndex: 0
+                                model: window.availableModels.length > 0 ? window.availableModels : ["No models available"]
+                                currentIndex: window.selectedModelIndex
+                                enabled: window.availableModels.length > 0
+                                
+                                onCurrentIndexChanged: {
+                                    if (window.availableModels.length > 0 && currentIndex >= 0) {
+                                        ChatController.setModel(window.availableModels[currentIndex])
+                                    }
+                                }
+                            }
+
+                            // Refresh models button
+                            Button {
+                                text: "↻"
+                                font.pixelSize: 16
+                                implicitWidth: 36
+                                implicitHeight: 36
+                                
+                                background: Rectangle {
+                                    color: parent.down ? "#2a4c8a" : (parent.hovered ? "#3a68b8" : "transparent")
+                                    radius: 8
+                                    border.color: theme.border
+                                    border.width: 1
+                                }
+                                
+                                contentItem: Label {
+                                    text: parent.text
+                                    font: parent.font
+                                    color: theme.text
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                
+                                onClicked: {
+                                    ChatController.refreshModels()
+                                    loadModels()
+                                }
+                                
+                                CustomToolTip {
+                                    text: "Refresh models"
+                                    visible: parent.hovered
+                                }
+                            }
+
+                            // Ollama status indicator
+                            Rectangle {
+                                width: 10
+                                height: 10
+                                radius: 5
+                                color: ChatController.isOllamaAvailable() ? "#4ade80" : "#f87171"
+                                
+                                CustomToolTip {
+                                    text: ChatController.isOllamaAvailable() ? "Ollama is running" : "Ollama is not running"
+                                    visible: parent.children[0].containsMouse
+                                }
+                                
+                                MouseArea {
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                }
                             }
 
                             Item { Layout.fillWidth: true }
@@ -218,6 +369,7 @@ ApplicationWindow {
                             Button {
                                 text: "+ New Chat"
                                 font.bold: true
+                                padding: 8
                                 
                                 contentItem: Label {
                                     text: parent.text
@@ -232,13 +384,7 @@ ApplicationWindow {
                                     radius: 8
                                 }
 
-                                onClicked: {
-                                    chatsModel.insert(0, {
-                                        title: "New conversation",
-                                        preview: "Start chatting..."
-                                    })
-                                    window.currentChatIndex = 0
-                                }
+                                onClicked: createNewChat()
                             }
                         }
                     }
@@ -247,6 +393,12 @@ ApplicationWindow {
                     HomePage { 
                         Layout.fillWidth: true
                         Layout.fillHeight: true
+                        currentChatId: window.currentChatId
+                        
+                        onChatCreated: function(chatId) {
+                            window.currentChatId = chatId
+                            loadChats()
+                        }
                     }
                 }
             }

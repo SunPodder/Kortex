@@ -2,14 +2,46 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-import "../components"
+import "../components" as Components
 
 Item {
     id: root
 
-    // Mock chat data
+    property string currentChatId: ""
+    
+    signal chatCreated(string chatId)
+
+    // Messages model
     ListModel {
         id: messagesModel
+    }
+
+    // Load messages when chat changes
+    onCurrentChatIdChanged: {
+        loadMessages()
+    }
+
+    function loadMessages() {
+        messagesModel.clear()
+        if (currentChatId) {
+            var messages = ChatController.getMessages(currentChatId)
+            for (var i = 0; i < messages.length; i++) {
+                messagesModel.append(messages[i])
+            }
+        }
+    }
+
+    // Connect to backend signals
+    Connections {
+        target: ChatController
+        
+        function onMessagesChanged() {
+            loadMessages()
+        }
+        
+        function onIsLoadingChanged() {
+            // Could show loading indicator
+        }
     }
 
     ColumnLayout {
@@ -75,7 +107,7 @@ Item {
                                 radius: 20
                             }
 
-                            CustomToolTip {
+                            Components.CustomToolTip {
                                 text: "Attach file"
                                 visible: parent.hovered
                             }
@@ -119,7 +151,7 @@ Item {
                                 radius: 20
                             }
 
-                            CustomToolTip {
+                            Components.CustomToolTip {
                                 text: "Voice input"
                                 visible: parent.hovered
                             }
@@ -128,7 +160,7 @@ Item {
                         Button {
                             Layout.preferredWidth: 40
                             Layout.preferredHeight: 40
-                            enabled: emptyInputField.text.trim().length > 0
+                            enabled: emptyInputField.text.trim().length > 0 && !ChatController.isLoading
                             flat: true
                             text: "➜"
                             font.pixelSize: 20
@@ -197,9 +229,9 @@ Item {
 
                 model: messagesModel
 
-                delegate: MessageBubble {
+                delegate: Components.MessageBubble {
                     width: chatView.width - 40
-                    text: model.text
+                    text: model.content
                     isUser: model.isUser
                 }
 
@@ -207,166 +239,68 @@ Item {
                     Qt.callLater(() => chatView.positionViewAtEnd())
                 }
             }
+            
+            // Loading indicator
+            Rectangle {
+                anchors.bottom: parent.bottom
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottomMargin: 20
+                width: loadingRow.width + 24
+                height: 40
+                radius: 20
+                color: "#1b2230"
+                visible: ChatController.isLoading
+                
+                Row {
+                    id: loadingRow
+                    anchors.centerIn: parent
+                    spacing: 8
+                    
+                    BusyIndicator {
+                        width: 20
+                        height: 20
+                        running: ChatController.isLoading
+                    }
+                    
+                    Label {
+                        text: "Thinking..."
+                        color: "#9aa5b8"
+                        font.pixelSize: 13
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+            }
         }
 
         // Input area (when conversation active)
-        Rectangle {
+        Components.ChatInput {
+            id: chatInputArea
             Layout.fillWidth: true
-            Layout.preferredHeight: 140
-            color: "#151a22"
-            border.color: "#2a3446"
-            border.width: 1
+            Layout.preferredHeight: implicitHeight
             visible: messagesModel.count > 0
-
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 12
-                spacing: 8
-
-                // Tools bar
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    Button {
-                        text: "📎"
-                        flat: true
-
-                        CustomToolTip {
-                            text: "Attach file"
-                            visible: parent.hovered
-                        }
-                    }
-
-                    Button {
-                        text: "🖼️"
-                        flat: true
-
-                        CustomToolTip {
-                            text: "Add image"
-                            visible: parent.hovered
-                        }
-                    }
-
-                    Button {
-                        text: "🎤"
-                        flat: true
-
-                        CustomToolTip {
-                            text: "Voice input"
-                            visible: parent.hovered
-                        }
-                    }
-
-                    Item { Layout.fillWidth: true }
-
-                    Label {
-                        text: "Tokens: ~" + (conversationInputField.text.length / 4).toFixed(0)
-                        color: "#707a8a"
-                        font.pixelSize: 11
-                    }
-                }
-
-                // Input area
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    ScrollView {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: Math.min(conversationInputField.implicitHeight, 80)
-
-                        TextArea {
-                            id: conversationInputField
-                            placeholderText: "Message Kortex..."
-                            wrapMode: TextArea.Wrap
-                            color: "#e8edf7"
-                            placeholderTextColor: "#707a8a"
-                            selectByMouse: true
-                            font.pixelSize: 14
-
-                            background: Rectangle {
-                                color: "transparent"
-                            }
-
-                            Keys.onReturnPressed: function(event) {
-                                if (event.modifiers & Qt.ControlModifier) {
-                                    sendConversationMessage()
-                                    event.accepted = true
-                                }
-                            }
-                        }
-                    }
-
-                    Button {
-                        text: "Send"
-                        enabled: conversationInputField.text.trim().length > 0
-                        font.bold: true
-                        
-                        contentItem: Label {
-                            text: parent.text
-                            font: parent.font
-                            color: parent.enabled ? "#ffffff" : "#707a8a"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-
-                        background: Rectangle {
-                            color: parent.enabled ? (parent.down ? "#2a4c8a" : (parent.hovered ? "#3a68b8" : "#325ab0")) : "#1b2230"
-                            border.color: parent.enabled ? "transparent" : "#2a3446"
-                            border.width: 1
-                            radius: 8
-                        }
-                        
-                        onClicked: sendConversationMessage()
-                    }
-                }
-
-                Label {
-                    text: "Ctrl+Enter to send"
-                    color: "#707a8a"
-                    font.pixelSize: 10
-                    Layout.alignment: Qt.AlignRight
-                }
+            
+            onSendMessage: function(text) {
+                if (text.trim().length === 0) return
+                if (ChatController.isLoading) return
+                ChatController.sendMessage(currentChatId, text)
             }
         }
     }
 
     function sendEmptyMessage() {
         if (emptyInputField.text.trim().length === 0) return
+        if (ChatController.isLoading) return
 
-        messagesModel.append({
-            text: emptyInputField.text,
-            isUser: true
-        })
-
+        var message = emptyInputField.text
         emptyInputField.text = ""
 
-        // Mock AI response
-        Qt.callLater(() => {
-            messagesModel.append({
-                text: "I'm processing your request. AI functionality will be implemented soon!",
-                isUser: false
-            })
-        })
-    }
-
-    function sendConversationMessage() {
-        if (conversationInputField.text.trim().length === 0) return
-
-        messagesModel.append({
-            text: conversationInputField.text,
-            isUser: true
-        })
-
-        conversationInputField.text = ""
-
-        // Mock AI response
-        Qt.callLater(() => {
-            messagesModel.append({
-                text: "I received your message. AI response functionality will be implemented soon!",
-                isUser: false
-            })
-        })
+        // Create new chat if needed, then send message
+        if (!currentChatId) {
+            var newChatId = ChatController.createChat()
+            root.chatCreated(newChatId)
+            ChatController.sendMessage(newChatId, message)
+        } else {
+            ChatController.sendMessage(currentChatId, message)
+        }
     }
 }

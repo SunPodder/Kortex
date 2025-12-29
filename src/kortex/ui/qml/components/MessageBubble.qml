@@ -8,7 +8,7 @@ Item {
     property bool isUser: false
 
     implicitHeight: bubbleRect.height + 16
-    implicitWidth: parent.width
+    implicitWidth: parent ? parent.width : 400
 
     Rectangle {
         id: bubbleRect

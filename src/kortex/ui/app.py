@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -7,6 +8,16 @@ from PySide6.QtCore import QObject, QUrl, Slot
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+
+from kortex.core.chat_controller import ChatController
+from kortex.core.user_info import UserInfo
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -89,6 +100,14 @@ def run_ui() -> int:
 
     controller = AppController(app, engine)
     engine.rootContext().setContextProperty("App", controller)
+
+    # Create and register the chat controller
+    chat_controller = ChatController()
+    engine.rootContext().setContextProperty("ChatController", chat_controller)
+
+    # Create and register user info provider
+    user_info = UserInfo()
+    engine.rootContext().setContextProperty("UserInfo", user_info)
 
     ui_paths = _find_ui_paths()
     main_qml_url = QUrl.fromLocalFile(str(ui_paths.main_qml))

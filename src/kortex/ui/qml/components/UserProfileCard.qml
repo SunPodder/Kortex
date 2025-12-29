@@ -7,8 +7,9 @@ Rectangle {
     radius: 10
     height: 50
 
-    property string userName: "sunpodder"
-    property string avatarText: "S"
+    property string userName: UserInfo ? UserInfo.username : "User"
+    property string avatarText: userName.length > 0 ? userName.charAt(0).toUpperCase() : "U"
+    property string avatarPath: UserInfo ? UserInfo.avatarPath : ""
 
     signal settingsClicked()
 
@@ -25,10 +26,12 @@ Rectangle {
         }
     }
 
+    // Avatar and name on the left
     Row {
-        anchors.fill: parent
-        anchors.margins: 8
-        spacing: 10
+        anchors.left: parent.left
+        anchors.leftMargin: 12
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: 8
 
         // Avatar
         Rectangle {
@@ -37,6 +40,18 @@ Rectangle {
             radius: 17
             color: "#3a68b8"
             anchors.verticalCenter: parent.verticalCenter
+            clip: true
+
+            Image {
+                id: avatarImage
+                anchors.fill: parent
+                source: root.avatarPath !== "" ? "file://" + root.avatarPath : ""
+                visible: status === Image.Ready
+                fillMode: Image.PreserveAspectCrop
+                smooth: true
+                layer.enabled: true
+                layer.smooth: true
+            }
 
             Label {
                 anchors.centerIn: parent
@@ -44,6 +59,7 @@ Rectangle {
                 color: "#e8edf7"
                 font.pixelSize: 16
                 font.bold: true
+                visible: avatarImage.status !== Image.Ready
             }
         }
 
@@ -58,14 +74,31 @@ Rectangle {
                 font.bold: true
             }
         }
+    }
 
-        Item { width: 1; height: 1 }
+    // Arrow icon on the right
+    Item {
+        anchors.right: parent.right
+        anchors.rightMargin: 12
+        anchors.verticalCenter: parent.verticalCenter
+        width: 20
+        height: 20
 
-        Label {
-            text: "⋮"
-            color: "#9aa5b8"
-            font.pixelSize: 20
-            anchors.verticalCenter: parent.verticalCenter
+        Canvas {
+            anchors.fill: parent
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+                ctx.strokeStyle = "#8899aa"
+                ctx.lineWidth = 2
+                ctx.lineCap = "round"
+                ctx.lineJoin = "round"
+                ctx.beginPath()
+                ctx.moveTo(6, 12);
+                ctx.lineTo(10, 8);
+                ctx.lineTo(14, 12);
+                ctx.stroke()
+            }
         }
     }
 

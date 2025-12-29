@@ -7,7 +7,7 @@ ComboBox {
     id: control
 
     Theme { id: theme }
-
+    padding: 10
     // Custom styling
     background: Rectangle {
         color: control.hovered ? theme.surface2 : theme.surface
