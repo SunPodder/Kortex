@@ -1,15 +1,99 @@
 """Chat controller for bridging Python backend with QML frontend."""
 from __future__ import annotations
 
+import json
 import logging
+import uuid
 from typing import Optional
 
 from PySide6.QtCore import QObject, Property, Signal, Slot, QThread
 
 from kortex.core.database import ChatDatabase
 from kortex.core.ollama_service import OllamaService, ChatMessage
+from kortex.core.agent import AgentService, AgentState, get_agent_service
+from kortex.core.tools import ToolCall, ToolResult, tool_registry, Permission
 
 logger = logging.getLogger(__name__)
+
+
+class AgentWorker(QThread):
+    """Worker thread for handling agent requests with tool calling."""
+    
+    response_ready = Signal(str, str, list)  # chat_id, response, pending_tool_calls
+    response_chunk = Signal(str, str)  # chat_id, chunk (for streaming)
+    response_error = Signal(str, str)  # chat_id, error message
+    tool_calls_ready = Signal(str, list)  # chat_id, list of tool call dicts
+    
+    def __init__(
+        self,
+        agent_service: AgentService,
+        user_message: str,
+        chat_id: str,
+        history: list[dict],
+        state: AgentState,
+    ) -> None:
+        super().__init__()
+        self._agent_service = agent_service
+        self._user_message = user_message
+        self._chat_id = chat_id
+        self._history = history
+        self._state = state
+    
+    def run(self) -> None:
+        """Execute the agent request."""
+        try:
+            response, pending_calls, updated_state = self._agent_service.process_message(
+                self._user_message,
+                self._state,
+                self._history,
+            )
+            
+            # Convert tool calls to serializable dicts
+            tool_call_dicts = [tc.to_dict() for tc in pending_calls]
+            
+            self.response_ready.emit(self._chat_id, response, tool_call_dicts)
+            
+        except Exception as e:
+            logger.error(f"Agent worker error: {e}")
+            self.response_error.emit(self._chat_id, str(e))
+
+
+class ToolExecutionWorker(QThread):
+    """Worker thread for executing tool calls."""
+    
+    execution_complete = Signal(str, str, list)  # chat_id, response, new_pending_tool_calls
+    execution_error = Signal(str, str)  # chat_id, error message
+    
+    def __init__(
+        self,
+        agent_service: AgentService,
+        chat_id: str,
+        state: AgentState,
+        approved_ids: set[str],
+        denied_ids: set[str],
+    ) -> None:
+        super().__init__()
+        self._agent_service = agent_service
+        self._chat_id = chat_id
+        self._state = state
+        self._approved_ids = approved_ids
+        self._denied_ids = denied_ids
+    
+    def run(self) -> None:
+        """Execute the tool calls."""
+        try:
+            response, new_pending, updated_state = self._agent_service.execute_tool_calls(
+                self._state,
+                approved_call_ids=self._approved_ids,
+                denied_call_ids=self._denied_ids,
+            )
+            
+            tool_call_dicts = [tc.to_dict() for tc in new_pending]
+            self.execution_complete.emit(self._chat_id, response, tool_call_dicts)
+            
+        except Exception as e:
+            logger.error(f"Tool execution worker error: {e}")
+            self.execution_error.emit(self._chat_id, str(e))
 
 
 class ChatWorker(QThread):
@@ -119,6 +203,10 @@ class ChatController(QObject):
     isLoadingChanged = Signal()
     responseReceived = Signal(str, str)  # chat_id, response
     
+    # Agent-related signals
+    toolCallsPending = Signal(str, list)  # chat_id, list of tool call dicts
+    agentModeChanged = Signal()
+    
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         
@@ -126,13 +214,30 @@ class ChatController(QObject):
         self._ollama = OllamaService()
         self._current_chat_id: Optional[str] = None
         self._is_loading = False
+        self._agent_mode = True  # Enable agent mode by default
         self._worker: Optional[ChatWorker] = None
+        self._agent_worker: Optional[AgentWorker] = None
+        self._tool_worker: Optional[ToolExecutionWorker] = None
         self._title_worker: Optional[TitleGeneratorWorker] = None
         self._models: list[str] = []
         self._current_model: str = ""
         
+        # Agent state per chat
+        self._agent_states: dict[str, AgentState] = {}
+        self._pending_tool_calls: dict[str, list[dict]] = {}
+        
         # Load available models
         self._refresh_models()
+    
+    def _get_agent_service(self) -> AgentService:
+        """Get the agent service with current model."""
+        return get_agent_service(self._current_model, self._ollama.host)
+    
+    def _get_or_create_agent_state(self, chat_id: str) -> AgentState:
+        """Get or create agent state for a chat."""
+        if chat_id not in self._agent_states:
+            self._agent_states[chat_id] = self._get_agent_service().create_state()
+        return self._agent_states[chat_id]
     
     # Properties
     @Property(bool, notify=isLoadingChanged)
@@ -144,6 +249,16 @@ class ChatController(QObject):
         if self._is_loading != value:
             self._is_loading = value
             self.isLoadingChanged.emit()
+    
+    @Property(bool, notify=agentModeChanged)
+    def agentMode(self) -> bool:
+        return self._agent_mode
+    
+    @agentMode.setter
+    def agentMode(self, value: bool) -> None:
+        if self._agent_mode != value:
+            self._agent_mode = value
+            self.agentModeChanged.emit()
     
     @Property(str, notify=currentChatChanged)
     def currentChatId(self) -> str:
@@ -230,6 +345,12 @@ class ChatController(QObject):
         """Delete a chat."""
         self._db.delete_chat(chat_id)
         
+        # Clean up agent state
+        if chat_id in self._agent_states:
+            del self._agent_states[chat_id]
+        if chat_id in self._pending_tool_calls:
+            del self._pending_tool_calls[chat_id]
+        
         if self._current_chat_id == chat_id:
             # Select another chat or None
             chats = self._db.get_all_chats()
@@ -266,6 +387,22 @@ class ChatController(QObject):
             }
             for msg in messages
         ]
+    
+    @Slot(str, result=list)
+    def getPendingToolCalls(self, chat_id: str) -> list:
+        """Get pending tool calls for a chat that need user permission."""
+        return self._pending_tool_calls.get(chat_id, [])
+    
+    @Slot(str, result=bool)
+    def hasPendingToolCalls(self, chat_id: str) -> bool:
+        """Check if a chat has pending tool calls awaiting permission."""
+        calls = self._pending_tool_calls.get(chat_id, [])
+        return any(tc.get("requires_permission", False) for tc in calls)
+    
+    @Slot(bool)
+    def setAgentMode(self, enabled: bool) -> None:
+        """Enable or disable agent mode."""
+        self.agentMode = enabled
     
     @Slot(str, str)
     def sendMessage(self, chat_id: str, content: str) -> None:
@@ -322,6 +459,38 @@ class ChatController(QObject):
         # Start loading
         self.isLoading = True
         
+        # Use agent mode or regular chat
+        if self._agent_mode:
+            self._send_agent_message(chat_id, content, messages)
+        else:
+            self._send_regular_message(chat_id, messages)
+    
+    def _send_agent_message(self, chat_id: str, content: str, messages: list) -> None:
+        """Send a message using the agent with tool calling."""
+        # Get agent state
+        state = self._get_or_create_agent_state(chat_id)
+        
+        # Prepare history for agent
+        history = [
+            {"role": msg.role, "content": msg.content}
+            for msg in messages[:-1]  # Exclude the message we just added
+        ]
+        
+        # Create and start agent worker
+        self._agent_worker = AgentWorker(
+            agent_service=self._get_agent_service(),
+            user_message=content,
+            chat_id=chat_id,
+            history=history,
+            state=state,
+        )
+        self._agent_worker.response_ready.connect(self._on_agent_response_ready)
+        self._agent_worker.response_error.connect(self._on_response_error)
+        self._agent_worker.finished.connect(self._on_agent_worker_finished)
+        self._agent_worker.start()
+    
+    def _send_regular_message(self, chat_id: str, messages: list) -> None:
+        """Send a message using regular chat (no tools)."""
         # Prepare messages for Ollama
         chat_messages = [
             ChatMessage(role=msg.role, content=msg.content)
@@ -339,6 +508,133 @@ class ChatController(QObject):
         self._worker.response_error.connect(self._on_response_error)
         self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
+    
+    def _on_agent_response_ready(self, chat_id: str, response: str, tool_calls: list) -> None:
+        """Handle response from agent."""
+        # Filter tool calls that need permission
+        permission_required = [tc for tc in tool_calls if tc.get("requires_permission", False)]
+        auto_approve = [tc for tc in tool_calls if not tc.get("requires_permission", False)]
+        
+        if permission_required:
+            # Store pending tool calls and wait for user decision
+            self._pending_tool_calls[chat_id] = tool_calls
+            
+            # Add partial response if any
+            if response:
+                self._db.add_message(chat_id, "assistant", response)
+                self.messagesChanged.emit()
+            
+            # Emit signal to show permission UI
+            self.toolCallsPending.emit(chat_id, permission_required)
+            self.isLoading = False
+            
+        elif auto_approve:
+            # Execute auto-approved tools immediately
+            self._pending_tool_calls[chat_id] = tool_calls
+            self._execute_tool_calls(chat_id, {tc["call_id"] for tc in auto_approve}, set())
+        else:
+            # No tool calls, just save the response
+            self._finalize_response(chat_id, response)
+    
+    def _finalize_response(self, chat_id: str, response: str) -> None:
+        """Finalize the agent response."""
+        if response:
+            self._db.add_message(chat_id, "assistant", response)
+            self.messagesChanged.emit()
+            self.chatsChanged.emit()
+            self.responseReceived.emit(chat_id, response)
+        
+        # Generate title for first message
+        messages = self._db.get_messages(chat_id)
+        if len(messages) == 2:
+            user_message = messages[0].content
+            if self._ollama.is_available() and self._current_model:
+                self._start_title_generation(chat_id, user_message)
+        
+        self.isLoading = False
+    
+    @Slot(str, list, list)
+    def respondToToolCalls(self, chat_id: str, approved_ids: list, denied_ids: list) -> None:
+        """Respond to pending tool call permission requests."""
+        approved_set = set(approved_ids)
+        denied_set = set(denied_ids)
+        
+        self.isLoading = True
+        self._execute_tool_calls(chat_id, approved_set, denied_set)
+    
+    def _execute_tool_calls(self, chat_id: str, approved_ids: set[str], denied_ids: set[str]) -> None:
+        """Execute tool calls after user approval."""
+        state = self._get_or_create_agent_state(chat_id)
+        
+        # Recreate pending tool calls from stored data
+        pending = self._pending_tool_calls.get(chat_id, [])
+        
+        state.pending_tool_calls = []
+        for tc in pending:
+            permissions = [Permission(p) for p in tc.get("permissions", [])]
+            state.pending_tool_calls.append(ToolCall(
+                tool_name=tc["tool_name"],
+                tool_description=tc["tool_description"],
+                arguments=tc["arguments"],
+                permissions=permissions,
+                requires_permission=tc["requires_permission"],
+                call_id=tc["call_id"],
+            ))
+        
+        # Clear stored pending calls
+        self._pending_tool_calls[chat_id] = []
+        
+        # Create and start tool execution worker
+        self._tool_worker = ToolExecutionWorker(
+            agent_service=self._get_agent_service(),
+            chat_id=chat_id,
+            state=state,
+            approved_ids=approved_ids,
+            denied_ids=denied_ids,
+        )
+        self._tool_worker.execution_complete.connect(self._on_tool_execution_complete)
+        self._tool_worker.execution_error.connect(self._on_response_error)
+        self._tool_worker.finished.connect(self._on_tool_worker_finished)
+        self._tool_worker.start()
+    
+    def _on_tool_execution_complete(self, chat_id: str, response: str, new_tool_calls: list) -> None:
+        """Handle tool execution completion."""
+        # Check if there are new tool calls requiring permission
+        permission_required = [tc for tc in new_tool_calls if tc.get("requires_permission", False)]
+        auto_approve = [tc for tc in new_tool_calls if not tc.get("requires_permission", False)]
+        
+        if permission_required:
+            # Store pending tool calls and wait for user decision
+            self._pending_tool_calls[chat_id] = new_tool_calls
+            
+            # Add partial response if any
+            if response:
+                self._db.add_message(chat_id, "assistant", response)
+                self.messagesChanged.emit()
+            
+            # Emit signal to show permission UI
+            self.toolCallsPending.emit(chat_id, permission_required)
+            self.isLoading = False
+            
+        elif auto_approve:
+            # Execute auto-approved tools immediately
+            self._pending_tool_calls[chat_id] = new_tool_calls
+            self._execute_tool_calls(chat_id, {tc["call_id"] for tc in auto_approve}, set())
+        else:
+            # No more tool calls, finalize response
+            self._finalize_response(chat_id, response)
+    
+    def _on_agent_worker_finished(self) -> None:
+        """Clean up after agent worker finishes."""
+        if self._agent_worker:
+            self._agent_worker.deleteLater()
+            self._agent_worker = None
+    
+    def _on_tool_worker_finished(self) -> None:
+        """Clean up after tool worker finishes."""
+        if self._tool_worker:
+            self._tool_worker.deleteLater()
+            self._tool_worker = None
     
     def _start_title_generation(self, chat_id: str, user_message: str) -> None:
         """Start background title generation."""

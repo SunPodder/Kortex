@@ -8,6 +8,7 @@ Item {
     id: root
 
     property string currentChatId: ""
+    property var pendingToolCalls: []
     
     signal chatCreated(string chatId)
 
@@ -19,6 +20,7 @@ Item {
     // Load messages when chat changes
     onCurrentChatIdChanged: {
         loadMessages()
+        pendingToolCalls = []
     }
 
     function loadMessages() {
@@ -41,6 +43,12 @@ Item {
         
         function onIsLoadingChanged() {
             // Could show loading indicator
+        }
+        
+        function onToolCallsPending(chatId, toolCalls) {
+            if (chatId === root.currentChatId) {
+                root.pendingToolCalls = toolCalls
+            }
         }
     }
 
@@ -223,6 +231,7 @@ Item {
                 id: chatView
                 anchors.fill: parent
                 anchors.margins: 20
+                anchors.bottomMargin: permissionCard.visible ? permissionCard.height + 30 : 20
                 spacing: 12
                 clip: true
                 visible: messagesModel.count > 0
@@ -240,9 +249,26 @@ Item {
                 }
             }
             
+            // Tool Permission Card
+            Components.ToolPermissionCard {
+                id: permissionCard
+                anchors.bottom: parent.bottom
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottomMargin: 16
+                width: Math.min(parent.width - 32, 500)
+                toolCalls: root.pendingToolCalls
+                chatId: root.currentChatId
+                visible: root.pendingToolCalls.length > 0
+                
+                onApproved: function(approvedIds, deniedIds) {
+                    ChatController.respondToToolCalls(root.currentChatId, approvedIds, deniedIds)
+                    root.pendingToolCalls = []
+                }
+            }
+            
             // Loading indicator
             Rectangle {
-                anchors.bottom: parent.bottom
+                anchors.bottom: permissionCard.visible ? permissionCard.top : parent.bottom
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottomMargin: 20
                 width: loadingRow.width + 24
