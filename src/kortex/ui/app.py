@@ -51,21 +51,23 @@ def _create_tray(
 
     menu = QMenu()
 
-    open_action = QAction("Open")
+    open_action = QAction("Open", menu)
     open_action.triggered.connect(show_main)
     menu.addAction(open_action)
 
-    settings_action = QAction("Settings")
+    settings_action = QAction("Settings", menu)
     settings_action.triggered.connect(show_settings)
     menu.addAction(settings_action)
 
     menu.addSeparator()
 
-    quit_action = QAction("Quit")
+    quit_action = QAction("Quit", menu)
     quit_action.triggered.connect(quit_app)
     menu.addAction(quit_action)
 
     tray.setContextMenu(menu)
+    # Keep reference to menu to prevent garbage collection
+    tray._menu = menu
 
     def _on_activated(reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
